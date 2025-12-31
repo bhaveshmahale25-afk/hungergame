@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Hippo Watermelon Game</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+  body {
+    margin:0;
+    background:#c7f0ff;
+    font-family:Arial;
+    text-align:center;
+    user-select:none;
+  }
+
+  #wrap {
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    padding:10px;
+  }
+
+  canvas {
+    background:#ffffff;
+    border:3px solid #333;
+    max-width:100%;
+    touch-action:none;
+  }
+
+  .hint { margin-top:6px; font-size:15px; }
+
+  .btn {
+    padding:10px 16px;
+    font-size:15px;
+    border-radius:10px;
+    border:none;
+    margin-top:8px;
+    color:white;
+  }
+
+  #playBtn   { background:#4CAF50; }
+  #pauseBtn  { background:#ff9800; display:none; }
+  #restartBtn{ background:#673ab7; display:none; }
+  #musicBtn  { background:#6b6be8; }
+</style>
+</head>
+
+<body>
+
+<div id="wrap">
+  <h3>🍉 Throw the Watermelon into the Hippo’s Mouth 🦛</h3>
+  <div class="hint">Drag to aim → release to throw</div>
+
+  <canvas id="game" width="900" height="420"></canvas>
+
+  <button id="playBtn"   class="btn">Play</button>
+  <button id="pauseBtn"  class="btn">Pause</button>
+  <button id="restartBtn"class="btn">Restart</button>
+  <button id="musicBtn"  class="btn">Music: OFF</button>
+</div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const playBtn   = document.getElementById("playBtn");
+const pauseBtn  = document.getElementById("pauseBtn");
+const restartBtn= document.getElementById("restartBtn");
+const musicBtn  = document.getElementById("musicBtn");
+
+// ---------- Responsive ----------
+function resizeCanvas() {
+  const s = Math.min(window.innerWidth * 0.95 / 900, 1);
+  canvas.style.width = 900 * s + "px";
+  canvas.style.height = 420 * s + "px";
+}
+resizeCanvas();
+window.addEventListener("resize", resizeCanvas);
+
+// ---------- Images ----------
+const hippoClosed = new Image(); hippoClosed.src = "hippo_closed.png";
+const hippoOpen   = new Image(); hippoOpen.src   = "hippo_open.png";
+const imgMelon    = new Image(); imgMelon.src    = "watermelon.png";
+const imgPlayer   = new Image(); imgPlayer.src   = "player.png";
+
+let imagesLoaded = false;
+hippoClosed.onload = hippoOpen.onload = imgMelon.onload = imgPlayer.onload =
+  () => imagesLoaded = true;
+
+// ---------- EVENT SOUNDS ----------
+const sndSuccess   = new Audio("success.mp3");   // normal hit
+const sndCombo     = new Audio("combo.mp3");     // combo hit
+const sndFail      = new Audio("fail.mp3");      // life lost / fail
+const sndOffscreen = new Audio("offscreen.mp3"); // ball goes out
+
+// ---------- BACKGROUND MUSIC ----------
+const bgMusic = new Audio("bgmusic.mp3");
+bgMusic.loop = true;
+let musicOn = false;
+
+// ---------- MOBILE AUDIO UNLOCK ----------
+let audioUnlocked = false;
+
+function unlockAudio() {
+  if (audioUnlocked) return;
+
+  // Prime audio (silent start)
+  [sndSuccess, sndCombo, sndFail, sndOffscreen, bgMusic].forEach(s => {
+    try {
+      s.volume = 0;
+      s.play().then(() => {
+        s.pause();
+        s.currentTime = 0;
+        s.volume = 1;
+      }).catch(()=>{});
+    } catch(e){}
+  });
+
+  audioUnlocked = true;
+}
+canvas.addEventListener("pointerdown", unlockAudio);
+
+// ---------- Player ----------
+let playerX = 90, playerY = 320;
+
+// ---------- Game State ----------
+let running = false;
+let gameOver = false;
+
+let score = 0;
+let lives = 5;
+let level = 1;
+let combo = 0;
+let bestCombo = 0;
+
+// ---------- Hippo ----------
+let hippo = {
+  x: 650, y: 250,
+  width: 170,
+  height: 140,
+  dir: 1,
+  speed: 2.2,
+  mouthOpen: false,
+  mouthTimer: 0,
+  reaction: ""
+};
+
+function updateMouth() {
+  hippo.mouthTimer++;
+  hippo.mouthOpen = (hippo.mouthTimer % 140 < 70);
+}
+
+// Tune mouth hit-zone to PNG
+const mouthHit = {
+  offsetX: 125,
+  offsetY: 300,
+  radius: 40
+};
+
+// ---------- Melon ----------
+let melon = {
+  x: playerX+30,
+  y: playerY-20,
+  vx: 0, vy: 0,
+  size: 22,
+  thrown:false,
+  dragging:false,
+  power:0
+};
+
+const gravity = 0.45;
+const THROW_SCALE = 0.12;
+
+function resetMelon() {
+  melon.x = playerX+30;
+  melon.y = playerY-20;
+  melon.vx = 0;
+  melon.vy = 0;
+  melon.thrown = false;
+  melon.dragging = false;
+  melon.power = 0;
+}
+
+// ---------- Draw ----------
+function drawPlayer() {
+  if (imagesLoaded)
+    ctx.drawImage(imgPlayer, playerX-20, playerY-85, 70, 90);
+}
+
+function drawHippo() {
+
+  hippo.x += hippo.dir * hippo.speed;
+  if (hippo.x < 520 || hippo.x > 780) hippo.dir *= -1;
+
+  const img = hippo.mouthOpen ? hippoOpen : hippoClosed;
+
+  if (imagesLoaded)
+    ctx.drawImage(img, hippo.x-40, hippo.y-100, hippo.width, hippo.height);
+
+  if (hippo.reaction) {
+    ctx.fillStyle="yellow";
+    ctx.fillRect(hippo.x+90, hippo.y-130, 120, 32);
+    ctx.fillStyle="black";
+    ctx.font="14px Arial";
+    ctx.fillText(hippo.reaction, hippo.x+98, hippo.y-110);
+  }
+}
+
+function drawMelon() {
+  if (imagesLoaded)
+    ctx.drawImage(imgMelon, melon.x-25, melon.y-25, 50, 50);
+}
+
+// ---------- Trajectory Guide ----------
+function drawGuideLine() {
+  if (!melon.dragging) return;
+
+  let x = melon.x;
+  let y = melon.y;
+
+  let vx = (melon.x - (playerX+30)) * THROW_SCALE * melon.power;
+  let vy = (melon.y - (playerY-20)) * THROW_SCALE * melon.power;
+
+  ctx.strokeStyle = "rgba(0,120,255,0.75)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6,4]);
+  ctx.beginPath();
+  ctx.moveTo(x,y);
+
+  for (let i = 0; i < 35; i++) {
+    vy += gravity * 0.6;
+    x += vx * 0.6;
+    y += vy * 0.6;
+    ctx.lineTo(x,y);
+  }
+
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// ---------- HUD ----------
+function drawHUD() {
+  ctx.fillStyle="black";
+  ctx.font="22px Arial";
+  ctx.fillText("Score: "+score, 20, 30);
+  ctx.fillText("Lives: "+lives, 20, 60);
+  ctx.fillText("Level: "+level, 20, 90);
+  ctx.fillText("Combo: "+combo+" (Best "+bestCombo+")", 20, 120);
+
+  if (!running && !gameOver) {
+    ctx.font="30px Arial";
+    ctx.fillStyle="#444";
+    ctx.fillText("Tap PLAY to Start", 340, 210);
+  }
+
+  if (gameOver) {
+    ctx.fillStyle="red";
+    ctx.font="38px Arial";
+    ctx.fillText("GAME OVER", 340, 210);
+  }
+}
+
+// ---------- Collision ----------
+function checkCollision() {
+
+  if (!hippo.mouthOpen) return;
+
+  const cx = hippo.x + mouthHit.offsetX;
+  const cy = mouthHit.offsetY;
+
+  const dx = melon.x - cx;
+  const dy = melon.y - cy;
+  const d = Math.sqrt(dx*dx + dy*dy);
+
+  if (d < melon.size + mouthHit.radius) {
+
+    combo++;
+    bestCombo = Math.max(bestCombo, combo);
+
+    score += (combo > 1 ? combo : 1);
+
+    // SOUND RULES
+    if (combo > 1) {
+      sndCombo.currentTime = 0;
+      sndCombo.play();
+    } else {
+      sndSuccess.currentTime = 0;
+      sndSuccess.play();
+    }
+
+    hippo.reaction = combo > 2 ? "NICE! x"+combo : "YUM 😄";
+
+    hippo.speed += 0.25;
+    if (score % 5 === 0) level++;
+
+    resetMelon();
+  }
+}
+
+// ---------- Physics ----------
+function updateMelon() {
+  if (!melon.thrown) return;
+
+  melon.vy += gravity;
+  melon.x += melon.vx;
+  melon.y += melon.vy;
+
+  // OFF-SCREEN
+  if (melon.y > canvas.height || melon.x > canvas.width+40) {
+
+    sndOffscreen.currentTime = 0;
+    sndOffscreen.play();
+
+    lives--;
+    combo = 0;
+
+    sndFail.currentTime = 0;
+    sndFail.play();
+
+    hippo.reaction = "MISS 😡";
+
+    resetMelon();
+
+    if (lives <= 0) {
+      gameOver = true;
+      running = false;
+      restartBtn.style.display="inline-block";
+    }
+  }
+
+  checkCollision();
+}
+
+// ---------- MAIN LOOP ----------
+function loop() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  drawPlayer();
+  drawHippo();
+  drawMelon();
+  drawGuideLine();
+
+  if (running && !gameOver) {
+    updateMouth();
+    updateMelon();
+  }
+
+  drawHUD();
+
+  requestAnimationFrame(loop);
+}
+loop();
+
+// ---------- Drag Aim ----------
+canvas.addEventListener("pointerdown", () => {
+  if (!running || gameOver || melon.thrown) return;
+  melon.dragging = true;
+});
+
+canvas.addEventListener("pointermove", e => {
+  if (!melon.dragging) return;
+
+  const r = canvas.getBoundingClientRect();
+  melon.x = e.clientX - r.left;
+  melon.y = e.clientY - r.top;
+
+  const dx = (playerX+30) - melon.x;
+  const dy = (playerY-20) - melon.y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+
+  melon.power = Math.min(dist / 220, 1.15);
+});
+
+canvas.addEventListener("pointerup", () => {
+  if (!melon.dragging || !running || gameOver) return;
+
+  melon.vx = (melon.x - (playerX+30)) * THROW_SCALE * melon.power;
+  melon.vy = (melon.y - (playerY-20)) * THROW_SCALE * melon.power;
+
+  melon.thrown = true;
+  melon.dragging = false;
+});
+
+// ---------- Buttons ----------
+playBtn.onclick = () => {
+  running = true;
+  playBtn.style.display="none";
+  pauseBtn.style.display="inline-block";
+};
+
+pauseBtn.onclick = () => {
+  running = false;
+  playBtn.style.display="inline-block";
+  pauseBtn.style.display="none";
+};
+
+restartBtn.onclick = () => {
+  score=0; lives=5; level=1;
+  combo=0; bestCombo=0;
+  hippo.speed=2.2;
+  hippo.reaction="";
+  hippo.mouthTimer=0;
+  gameOver=false;
+  running=false;
+  restartBtn.style.display="none";
+  playBtn.style.display="inline-block";
+  resetMelon();
+};
+
+// ---------- MUSIC TOGGLE ----------
+musicBtn.onclick = () => {
+  unlockAudio();
+
+  musicOn = !musicOn;
+
+  if (musicOn) {
+    bgMusic.currentTime = 0;
+    bgMusic.play();
+    musicBtn.textContent = "Music: ON";
+  } else {
+    bgMusic.pause();
+    musicBtn.textContent = "Music: OFF";
+  }
+};
+</script>
+
+</body>
+</html>
